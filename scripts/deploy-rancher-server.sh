@@ -12,4 +12,4 @@ docker-machine create --driver exoscale \
 
 eval $(docker-machine env devoxx-uk)
 
-docker run -d -p 8080:8080 rancher/server:stable
+docker run -d -p 8080:8080 rancher/server:latest

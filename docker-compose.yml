@@ -1,0 +1,22 @@
+version: '2'
+services:
+  nginx:
+    # https://hub.docker.com/r/smashwilson/lets-nginx/
+    image: smashwilson/lets-nginx
+    environment:
+      EMAIL: "<your_email>"
+      DOMAIN: "<your_domain>"
+      UPSTREAM: "rancher:8080"
+      # STAGING: 1
+    ports:
+      - "80:80"
+      - "443:443"
+    links:
+      - rancher
+  rancher:
+    # https://hub.docker.com/r/rancher/server/
+    # image: rancher/server:latest
+    image: rancher/server:stable
+    # image: rancher/server:v1.0.2
+    ports:
+      - "8080:8080"

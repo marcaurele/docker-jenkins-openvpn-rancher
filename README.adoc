@@ -1,0 +1,10 @@
+Creating a safe dev environment on a public Cloud with Docker, Jenkins, OpenVPN and Rancher
+===========================================================================================
+:Author:    Marc-Aurèle Brothier
+:Email:     marco@exoscale.ch
+:imagesdir: images/
+
+
+Coming soon at
+https://cfp.devoxx.co.uk/2016/talk/ZTR-2267/Creating_a_safe_dev_environment_on_a_public_Cloud_with_Docker,_Jenkins,_Rancher_and_OpenVPN[Devoxx UK 2016].
+

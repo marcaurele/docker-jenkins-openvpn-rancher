@@ -5,6 +5,359 @@ Creating a safe dev environment on a public Cloud with Docker, Jenkins, OpenVPN 
 :imagesdir: images/
 
 
-Coming soon at
-https://cfp.devoxx.co.uk/2016/talk/ZTR-2267/Creating_a_safe_dev_environment_on_a_public_Cloud_with_Docker,_Jenkins,_Rancher_and_OpenVPN[Devoxx UK 2016].
+This setup will use 4 instances to run Rancher server, Jenkins, Tomcat and an
+OpenVPN server. Then you will be able to work, build, deploy over a VPN link to
+instances in the cloud.
 
+image::dia.png[]
+
+Setup our cloud
+----------------
+
+Get our credentials
+~~~~~~~~~~~~~~~~~~~~
+
+Log on our https://portal.exoscale.ch[cloud provider] portal and get the
+https://portal.exoscale.ch/account/profile/api[account API credentials] which
+you need to expose as environment variables, in my case using exoscale:
+[source,shell]
+----
+export DEMO_API_KEY='<your api key>'
+export DEMO_SECRET_KEY='<your secret key>'
+export CLOUDSTACK_ENDPOINT='https://api.exoscale.ch/compute'
+export CLOUDSTACK_KEY=$DEMO_API_KEY
+export CLOUDSTACK_SECRET=$DEMO_SECRET_KEY
+----
+
+Create a security group
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Create a security group by using this
+link:scripts/01-security-group.py[python script]:
+[source,shell]
+----
+# Create a virtual environment named ".venv"
+python3 -m venv .venv
+source ./.venv/bin/activate
+# Install the cs package // <1>
+pip install cs
+# Deploy firewall rules
+./scripts/create-security-group.py "demo-devoxx"
+----
+<1> https://pypi.python.org/pypi/cs
+
+Or manually create one in the interface with those rules:
+
+- Allow 22/tcp, 2376/tcp and 8080/tcp ports from any source, needed for Docker
+  machine to provision hosts.
+- Allow 500/udp and 4500/udp ports from any source, needed for Rancher network.
+- Allow 9345/tcp and 9346/tcp ports from any source, needed for UI features
+  like graphs, view logs, and execute shell.
+- Allow 1194/tcp and 2222/tcp ports from any source, needed to publish our VPN
+  server container.
+- Allow 443/tcp ports from any source, needed to access Rancher UI over HTTPS.
+
+image::exoscale-security-group.png[title="Security Group",link="https://portal.exoscale.ch/compute/firewalling"]
+
+Create a docker machine
+-----------------------
+
+. Start a new docker machine directly from your local machine by using a
+  docker driver since exoscale is providing one:
+
+    docker-machine create --driver exoscale \
+        --exoscale-api-key $DEMO_API_KEY \
+        --exoscale-api-secret-key $DEMO_SECRET_KEY \
+        --exoscale-instance-profile 'Tiny' \
+        --exoscale-disk-size '50' \
+        --exoscale-image 'ubuntu-16.04' \
+        --exoscale-security-group 'demo-devoxx' \
+        --exoscale-availability-zone 'ch-dk-2' \
+        "devoxxuk-ma"
+
+. Export the docker machine environment variables for this new machine:
+
+    eval $(docker-machine env devoxxuk-ma)
+
+. Start a docker container with Rancher server on our new docker machine:
+
+    docker run -d -p 8080:8080 rancher/server:stable
+
+. Point your browser to the public IP found in
+  https://portal.exoscale.ch/compute/instances[the portal] for our instance:
+`http://xxx.xxx.xxx.xxx:8080/` (http://159.100.249.155:8080/ in my case).
+
+
+[NOTE]
+====
+*TLS*
+
+At the time of writing, there's a bug in the rancher server UI which loads
+content over http only, making impossible to start a NGINX-TLS proxy in
+front of it. You'll find in `docker-compose.yml` file the setup to run rancher
+behind a nginx + let's encrypt proxy.
+====
+
+Provisioning Docker hosts
+-------------------------
+
+. First you need to add our cloud provider, exoscale in my case, as it's not
+enabled by default.
++
+image::rancher-add-host.png[title="Only a few provider are enabled by default"]
++
+. Click on _Manage available machine drivers_ and click the _play_ sign button to
+the far right to enable _exoscale_ driver.
++
+image::rancher-add-host-drivers.png[]
++
+. Go back in your browser and you will see the logo for exoscale, click on it
+and enter your credentials, the same as used before for docker.
++
+image::rancher-add-host-exoscale.png[]
++
+. Next choose the security group you created in the portal (_might be buggy_)
++
+image::rancher-add-host-security-group.png[]
++
+. Next choose the number of instances, 3 for our scenario (VPN, Jenkins,
+  Tomcat). Named them as you want and choose a profile size that suits your
+  needs.
++
+image::rancher-add-host-instance.png[]
+
+
+Now we have a working rancher server running on a cloud instance with a
+provision of 3 hosts to run containers on them. Let's deploy those 3
+containers:
+
+- OpenVPN to create the VPN acess.
+- Jenkins to build our webapp.
+- Tomcat to run our webapp.
+
+
+
+Setup containers on Rancher server
+----------------------------------
+
+Time to deploy a first service, click on _Add Service_ button (_you will have
+to do this add 3 times_)
+
+image::rancher-add-service.png[]
+
+
+
+OpenVPN
+~~~~~~~
+For the OpenVPN container:
+
+. Scale it to 1 container.
++
+image::rancher-add-service-container.png[]
++
+. Enter a name for it: *rancher-vpn-server*.
+. Enter the docker image: *nixel/rancher-vpn-server:latest*.
+. Add this TCP port map: 1194 (on Host) to 1194 (in Container).
+. Add this TCP port map: 2222 (on Host) to 2222 (in Container).
++
+image::rancher-service-openvpn.png[]
++
+. In _Volume_ section add a new volume to persist the VPN configuration:
+  `/etc/openvpn:/etc/openvpn`
++
+image::rancher-service-openvpn-volumes.png[]
++
+. In _Security_ enable the container _full access to the host_ by checking the
+  box.
++
+image::rancher-service-openvpn-security.png[]
+. And start the container
+
+After a while the container will be ready. But you don't need to wait before
+creating the other ones.
+
+
+Jenkins
+~~~~~~~
+. Scale it to 1 container.
++
+image::rancher-add-service-container.png[]
++
+. Enter a name for it: *jenkins*.
+. Enter the docker image: *jenkins*.
+. No port map is required
++
+image::rancher-service-jenkins.png[]
++
+. In _Volume_ section add a new volume to persist the Jenkins configuration:
+  `/var/jenkins_home`
++
+image::rancher-service-jenkins-volumes.png[]
++
+. And start it!.
+
+
+Tomcat
+~~~~~~
+. Scale it to 1 container.
++
+image::rancher-add-service-container.png[]
++
+. Enter a name for it: *tomcat*.
+. Enter the docker image: *tutum/tomcat:7.0*.
+. No port map is required
++
+image::rancher-service-tomcat.png[]
++
+. And start it!.
+
+
+Now we have 3 services running on our rancher server:
+
+image::rancher-service-list.png[]
+
+
+Connect to the VPN
+------------------
+
+You need to access the logs of the VPN server to get the generated password
+to download the configuration. Go in `Infrastructure` -> `Hosts` to see the
+3 instances details. On the vpn server container, clikc the 3 vertical dots
+and choose `View Logs`.
+
+image::rancher-host-vpn-view-logs.png[]
+
+image::openvpn-logs.png[title="Command line in the logs to download the VPN configuration."]
+
+Using a OpenVPN client
+~~~~~~~~~~~~~~~~~~~~~~
+
+Download the configuration file for OpenVPN through SSH as you will see in the
+log output with the corresponding command line. In my case I got this command:
+[source,shell]
+----
+sshpass -p Kkd58ew5gEk0QCcZFrWq ssh -p 2222 -o ConnectTimeout=4 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no root@185.19.30.240 "get_vpn_client_conf.sh 185.19.30.240:1194" > RancherVPNClient.ovpn
+----
+
+Best is it to do the `ssh -p 2222 ...` command and enter the password in the
+prompt, skipping the use of `sshpass`.
+[source,shell]
+----
+ssh -p 2222 -o ConnectTimeout=4 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no root@185.19.30.240 "get_vpn_client_conf.sh 185.19.30.240:1194" > RancherVPNClient.ovpn
+# when prompt enter: Kkd58ew5gEk0QCcZFrWq
+----
+
+And just load it in your OpenVPN client, and start the connection to the
+server. Now you are able to connect to Jenkins and tomcat using their own
+container IP address you'll find on the service view. If you tried before
+connecting the VPN, you wouldn't have been able.
+
+
+Configure Jenkins
+-----------------
+
+First we will need to get the admin password for Tomcat to be able to deploy
+the app. On the rancher server interface, go to the host view again, and
+view the Tomcat logs.
+
+image::rancher-host-tomcat-view-logs.png[]
+
+image::tomcat-logs.png[title="Keep this admin password for later"]
+
+Open your browser to the http://JENKINS_CONTAINER:8080 (in my case
+http://10.42.45.156:8080/)
+
+image::jenkins-dashboard.png[title="Jenkins Dashboard"]
+
+Before starting you must install Github Plugin and Maven following these steps:
+
+. Click _Manage Jenkins_ menu option and then Manage Plugins
+. Go to Available tab and search for Github plugin, named “Github Plugin”.
+  Activate its checkbox
+. Click Download now and install after restart button
+. When the plugin is installed enable checkbox Restart Jenkins when
+  installation is complete and no jobs are running, and then wait for Jenkins
+  to be restarted
+. When Jenkins is running again, go to Manage Jenkins and click Configure
+  System
+. In Maven section click Add Maven button, enter a name for the installation
+  and choose the maven version you want, in my case the latest available 3.3.9.
++
+image::jenkins-maven-config.png[]
++
+. Click Save button to finish
+
+Create a new job in the _Dashboard_, clikc _create new jobs_ and do as follow:
+
+. Enter a job name, for example _devoxx-demo_
+. Choose _Maven project_ and click _OK_
++
+image::jenkins-new-job.png[]
++
+. In _Source Code Management_ section choose _Git_ and enter this repository
+  url:
+  - https://github.com/marcaurele/sample-spring-boot
+. In _Build_ section enter the following maven goals and options. Replace
+  *TOMCAT_CONTAINER_IP* with the IP assigned to your Tomcat container
+  (10.42.18.196 in my case) and *TOMCAT_ADMIN_PASSWORD* with the password we
+  saw in the Tomcat logs of the container (`2VPRIHq3Lcq4` in my case).
++
+    clean package tomcat7:redeploy -DTOMCAT_HOST=TOMCAT_CONTAINER_IP -DTOMCAT_PORT=8080 -DTOMCAT_USER=admin -DTOMCAT_PASS=TOMCAT_ADMIN_PASSWORD
+    # In my case
+    clean package tomcat7:redeploy -DTOMCAT_HOST=10.42.18.196 -DTOMCAT_PORT=8080 -DTOMCAT_USER=admin -DTOMCAT_PASS=2VPRIHq3Lcq4
++
+image::jenkins-job-config.png[]
++
+. Save the job
+
+Now you can click _Build Now_ to run the job. If you check the _Console Output_
+you will see at the end a _Build success_:
+
+image::maven-build-result.png[]
+
+
+Testing the sample app
+----------------------
+
+Now browse to http://TOMCAT_CONTAINER_IP:8080/sample/ (in my case
+http://10.42.18.196:8080/sample/) and you will see some information about
+the Tomcat container and your browser.
+
+image::sample-app.png[]
+
+
+
+Deploying the app from your local machine
+-----------------------------------------
+
+Of course you can also deploy the app from your local computer to iterate
+faster by running the maven command locally:
+
+[source,shell]
+----
+git clone https://github.com/marcaurele/sample-spring-boot.git
+cd sample-spring-boot
+# Replace TOMCAT_CONTAINER_IP and TOMCAT_ADMIN_PASSWORD
+mvn clean package tomcat7:redeploy -DTOMCAT_HOST=TOMCAT_CONTAINER_IP -DTOMCAT_PORT=8080 -DTOMCAT_USER=admin -DTOMCAT_PASS=TOMCAT_ADMIN_PASSWORD
+
+# In my case
+mvn clean package tomcat7:redeploy -DTOMCAT_HOST=10.42.18.196 -DTOMCAT_PORT=8080 -DTOMCAT_USER=admin -DTOMCAT_PASS=2VPRIHq3Lcq4
+----
+
+image::local-maven-deploy.png[]
+
+Conslusion
+----------
+
+We have now a development environment running on a public cloud provider,
+exoscale, with an encrypted connection to stay safe while coding our app,
+without to have to think anymore about exposing or mapping ports or editing
+firewall rules. This setup enables you to work from any location
+(office, home, wifi hotspot) too, or to give access to your environment to
+other people.
+
+
+Credits
+-------
+Based on http://rancher.com/building-a-continuous-integration-environment-using-docker-jenkins-and-openvpn/[Manel Martinez Gonzalez]
+post with some modifiations.

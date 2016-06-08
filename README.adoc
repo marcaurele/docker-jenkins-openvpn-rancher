@@ -81,7 +81,7 @@ Create a docker machine
 
 . Start a docker container with Rancher server on our new docker machine:
 
-    docker run -d -p 8080:8080 rancher/server:latest
+    docker run -d -p 8080:8080 rancher/server:v1.1.0-dev3
 
 . Point your browser to the public IP found in
   https://portal.exoscale.ch/compute/instances[the portal] for our instance:
